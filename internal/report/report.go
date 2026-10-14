@@ -426,7 +426,11 @@ func renderInventory(b Bundle) string {
 		sort.Strings(keys)
 
 		fmt.Fprintf(&s, "| artifact | %s | ATT&CK |\n", strings.Join(keys, " | "))
-		fmt.Fprintf(&s, "|---|%s|---|\n", strings.Repeat("---|", len(keys)))
+		// Columns are: artifact, each attribute key, ATT&CK -- len(keys)+2 total.
+		// A previous version wrote "|---|" + strings.Repeat(...) + "|---|", which double
+		// counts the separator between the last attribute and the ATT&CK column and
+		// renders a stray "||" that some Markdown viewers misalign.
+		fmt.Fprintf(&s, "|%s\n", strings.Repeat("---|", len(keys)+2))
 		for _, it := range items {
 			cells := make([]string, 0, len(keys))
 			for _, k := range keys {

@@ -543,6 +543,55 @@ definition.
 
 ---
 
+## Phase 3 — Unified CLI, coverage reports, README, build/release notes — **GATE PASSED**
+
+The CLI shell was actually built incrementally starting in Phase 1 (`cmd/irscan`); Phase 3
+closed out what remained: `README.md`, `RELEASE_NOTES.md`, and a close read of the actual
+rendered output of every report type, which found and fixed two real defects.
+
+### CLI surface verified end-to-end
+
+- `irscan attack --os <windows|linux> [--technique ...] [--tactic ...] [--check ...]`
+- `irscan attack --report coverage` — static, no scan, no `--output` required
+- `irscan all --scope <id> --output <dir>` — **verified it refuses to run without `--scope`**
+  (`irscan all --output /tmp/x` with no scope → clean error, exit 1)
+- `--dry-run` for both OS targets — verified it correctly lists only the 8 Windows checks
+  with their real source/privilege strings when `--os windows` is passed (even though it
+  cannot execute them), and correctly explains why each Linux check is `NOT RUN`
+- `irscan malware` — verified it exits non-zero with the D-007 explanation, never returns an
+  empty "clean" result
+- `irscan attack --report bogus` — verified a clean, specific error rather than a stack trace
+
+### Defects found by reading the actual rendered reports, not just grepping for success
+
+1. **The scan manifest never recorded who ran the scan.** `scan_manifest.json` /
+   `findings.md` / `inventory.md` headers all printed `scanned as \`\`` (empty) regardless of
+   the real user, because `cmd/irscan/main.go`'s `buildManifest` built `model.HostInfo`
+   independently of `internal/check.NewEnv` and simply never set `ScanUser` or `Elevated`.
+   Caught by reading the actual output of a real scan, not by a unit test — nothing asserted
+   this field was non-empty. Fixed by extracting the logic into a single shared function,
+   `check.BuildHostInfo`, called from both `NewEnv` (per-check) and the CLI (the manifest), so
+   the two can no longer independently disagree about who ran the scan.
+2. **A Markdown table in `inventory.md` rendered a broken separator row** (`|---|---|---||---|`
+   — one fewer `---|` segment than header columns, from a redundant leading `|---|` appended
+   after an already-terminated `strings.Repeat` block). Fixed to build the separator from a
+   single column count. Re-verified the fixed output renders a correct 6-column separator.
+
+Both were only found because the actual report files were read end-to-end after a real scan,
+not inferred from the Go tests passing — the test suite had no assertion that would have
+caught either one. Recorded here as a reminder for the review pass: tests passing is not the
+same as the output being right.
+
+### Final sanity pass on `coverage_and_gaps.md`
+
+- `Inconsistencies` section is empty (no registry/check mapping disagreement) — confirmed by
+  its absence in the rendered output (the renderer only prints the section when non-empty).
+- Gap count: **472** = 511 (`U_host`) − 39 (effectively `IMPLEMENTED`), matching M3 exactly.
+- Spot-checked several `PARTIAL` rows (`T1053.006`, `T1070.003`, `T1078.003`) — each correctly
+  names the specific check providing partial coverage and states why it's excluded from M3.
+
+---
+
 ## Blockers carried forward
 
 | ID | Blocker | Effect |

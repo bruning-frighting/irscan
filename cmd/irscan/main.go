@@ -357,14 +357,10 @@ func buildManifest(scanID string, o *opts, mopts module.Options, reg *registry.R
 		SuppressedCount: suppressedCount,
 	}
 
-	hostname, _ := os.Hostname()
-	m.Host = model.HostInfo{
-		Hostname:      hostname,
-		OS:            o.targetOS,
-		Arch:          runtime.GOARCH,
-		FSRoot:        o.root,
-		SyntheticRoot: o.synthetic,
-	}
+	// Shared with every check's own Env construction (internal/check.BuildHostInfo), so the
+	// manifest header and the per-check environment can never disagree about who ran the
+	// scan or whether it was elevated.
+	m.Host = check.BuildHostInfo(o.targetOS, o.root, o.synthetic)
 
 	for _, r := range results {
 		m.ChecksRun = append(m.ChecksRun, r.CheckID)

@@ -29,6 +29,33 @@ type EnvOptions struct {
 	Telemetry collect.TelemetrySource
 }
 
+// BuildHostInfo is the single source of truth for host identification, shared by NewEnv and
+// by the CLI's scan-manifest construction (cmd/irscan). Without this sharing, the manifest
+// header and the per-check Env can silently disagree about who ran the scan and whether it
+// was elevated -- which happened during development: the manifest's Host block was built
+// independently and simply never populated ScanUser or Elevated, so the report printed
+// "scanned as ``" even on a real run.
+func BuildHostInfo(targetOS, fsRoot string, synthetic bool) model.HostInfo {
+	host := model.HostInfo{
+		OS:            targetOS,
+		Arch:          runtime.GOARCH,
+		FSRoot:        fsRoot,
+		SyntheticRoot: synthetic,
+		Attributes:    map[string]string{},
+	}
+	if synthetic {
+		host.Hostname = "fixture-" + filepath.Base(fsRoot)
+		host.ScanUser = "(fixture)"
+	} else {
+		if hn, err := os.Hostname(); err == nil {
+			host.Hostname = hn
+		}
+		host.ScanUser = currentUser()
+		host.Elevated = isElevated()
+	}
+	return host
+}
+
 // NewEnv builds a check Env.
 //
 // Defaults are chosen so that an unsupplied source reports itself unavailable WITH A REASON
@@ -60,23 +87,7 @@ func NewEnv(opts EnvOptions) Env {
 		tel = defaultTelemetry(opts, fs)
 	}
 
-	host := model.HostInfo{
-		OS:            opts.TargetOS,
-		Arch:          runtime.GOARCH,
-		FSRoot:        opts.FSRoot,
-		SyntheticRoot: opts.Synthetic,
-		Attributes:    map[string]string{},
-	}
-	if opts.Synthetic {
-		host.Hostname = "fixture-" + filepath.Base(opts.FSRoot)
-		host.ScanUser = "(fixture)"
-	} else {
-		if hn, err := os.Hostname(); err == nil {
-			host.Hostname = hn
-		}
-		host.ScanUser = currentUser()
-		host.Elevated = isElevated()
-	}
+	host := BuildHostInfo(opts.TargetOS, opts.FSRoot, opts.Synthetic)
 
 	return Env{
 		Host:      host,
