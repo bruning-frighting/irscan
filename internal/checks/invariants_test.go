@@ -41,6 +41,9 @@ var expectedChecks = []string{
 	"LNX-DEFIMP-HISTORY-001",
 	"LNX-STEALTH-LOGSINK-001",
 	"LNX-STEALTH-HIDDEN-001",
+	// Phase 2c credential access
+	"LNX-CRED-FILES-001",
+	"WIN-CRED-UNSECURED-001",
 }
 
 func TestExpectedChecksAreRegistered(t *testing.T) {

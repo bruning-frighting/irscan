@@ -428,6 +428,63 @@ OS) pairs: linux 20/167, windows 20/269.
 
 ---
 
+## Phase 2c — Credential Access — **GATE PASSED**
+
+Two checks added, taking the inventory to **19**.
+
+| Check | ATT&CK (non-partial) | OS | Validation |
+|---|---|---|---|
+| `LNX-CRED-FILES-001` | T1552.001, T1552.004, T1552 (T1552.003 partial) | linux | **LAB_VERIFIED** |
+| `WIN-CRED-UNSECURED-001` | T1552.002, T1552.001, T1552 | windows | FIXTURE_TESTED (B-001) |
+
+### Scoping, done before writing code
+
+Before designing the Linux check, the live host was searched for what a naive
+"grep for password/secret" design would actually match. The result ruled that design out
+immediately: a case-insensitive recursive grep for `password` across `/home`, `/root` and
+`/etc` returned hundreds of hits from `node_modules`, vulnerability-scanner templates
+(nuclei), documentation, and the source code of other security tools — not one of them a
+real credential. A similar grep for a PEM private-key header matched almost exclusively test
+fixtures, CVE proof-of-concept payloads and Go's own stdlib test data. `.netrc`,
+`.aws/credentials` and `.pgpass` were all genuinely absent (a clean baseline).
+
+Consequently `LNX-CRED-FILES-001` never does a filesystem-wide keyword search. It reads a
+short, **named** list of well-known credential-bearing files, recognises secret-bearing
+**fields by name** (not by the English word "password"), and looks for private keys only in
+`~/.ssh` and `/etc/ssh` — the locations an SSH client/server actually use. Every credential
+check in this phase follows the spec's redaction rule strictly: `check.RedactedEvidence` is
+used everywhere a secret might appear, and no finding's `Title` or `WhatAndWhere` ever embeds
+matched content — only path, pattern type, and count.
+
+### Real-host validation (live WSL2 Kali, unprivileged) — a genuine true positive
+
+`scan_id irscan-20261014T072001Z-6c221b5b`, 11 checks executed, 607 inventory items,
+**1 reportable finding**. The finding: `/home/kali/.bash_history` matched the
+`mysql -p<password>` inline-credential idiom 11 times and an attached-Authorization-header
+idiom once. This is a real, correct detection — the host is a penetration-testing
+workstation whose user has typed engagement credentials directly on the command line — and
+the check reported only the **pattern type and match count**, never the commands or the
+secrets themselves, exactly as the overlay's false-positive handling and the redaction rule
+require. `WIN-CRED-UNSECURED-001` could not be run (no Windows execution under B-001) but
+passed all four fixture cases, including per-artifact attribution (`T1552.002` for the
+Winlogon/PuTTY registry values, `T1552.001` for the unattend.xml `<Password>` element) in a
+single fixture run.
+
+### Coverage after Phase 2c
+
+| Metric | Phase 2b | Phase 2c |
+|---|---|---|
+| M3 implementation coverage | 35/296 = 11.8% | **39/296 = 13.2%** |
+| M4 partial coverage | 4/296 | 5/296 = 1.7% |
+| M5 validation (LAB_VERIFIED) | 10/17 = 58.8% | **11/19 = 57.9%** (FIXTURE_TESTED 8/19 beside it) |
+
+M3 per tactic: persistence 23/91, defense-impairment 9/35, stealth 4/141,
+**credential-access 5/58** (up from 1/58 — the new sub-techniques plus the carried-over
+T1556.002 mapping from Phase 2a). Figures recomputed directly from
+`irscan attack --report coverage` output, not hand-calculated.
+
+---
+
 ## Blockers carried forward
 
 | ID | Blocker | Effect |

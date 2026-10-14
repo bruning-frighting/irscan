@@ -939,6 +939,109 @@ def hiddenartifacts() -> None:
           "NOT_DETECTED when no staging directory can be examined.")
 
 
+# =========================================================================================
+# LNX-CRED-FILES-001
+# =========================================================================================
+
+# Inert placeholder PEM bodies. These are NOT real key material -- there is no
+# corresponding public key or certificate anywhere, and the base64-looking body is just
+# repeated filler. They exist only to exercise the PEM-header / encrypted-marker parser.
+FAKE_PEM_UNENCRYPTED = """\
+-----BEGIN OPENSSH PRIVATE KEY-----
+ZmlNdHVyZU9ubHlOb3RBUmVhbEtleUZpeHR1cmVPbmx5Tm90QVJlYWxLZXk=
+ZmlNdHVyZU9ubHlOb3RBUmVhbEtleUZpeHR1cmVPbmx5Tm90QVJlYWxLZXk=
+-----END OPENSSH PRIVATE KEY-----
+"""
+FAKE_PEM_ENCRYPTED = """\
+-----BEGIN RSA PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: AES-128-CBC,FIXTUREFIXTUREFIXTUREFIXTUREFIXT
+
+ZmlNdHVyZU9ubHlOb3RBUmVhbEtleUZpeHR1cmVPbmx5Tm90QVJlYWxLZXk=
+-----END RSA PRIVATE KEY-----
+"""
+
+
+def credfiles() -> None:
+    t = "lnx-cred-files-001/positive"
+    w(t, "etc/passwd", PASSWD_BASIC)
+    # CRF-C1: a recognised secret-bearing field. FAKE value, not a real AWS key.
+    w(t, "home/alice/.aws/credentials", """\
+[default]
+aws_access_key_id = AKIAFIXTUREONLYNOTREAL
+aws_secret_access_key = fixture/ONLY+not0a0real0secret0value0000
+""", mode=0o600)
+    # CRF-C2 + CRF-C3 together (corroborated): unencrypted AND world-readable.
+    w(t, "home/alice/.ssh/id_rsa", FAKE_PEM_UNENCRYPTED, mode=0o644)
+    # CRF-C4: a command-line credential idiom in history.
+    w(t, "home/alice/.bash_history", """\
+ls -la
+cd /var/www
+PGPASSWORD=fixtureNotARealSecret psql -h db.internal -U app -d orders
+history -c
+""", mode=0o600)
+
+    t = "lnx-cred-files-001/negative"
+    w(t, "etc/passwd", PASSWD_BASIC)
+    # Properly protected: encrypted and 0600. Must not fire.
+    w(t, "home/alice/.ssh/id_rsa", FAKE_PEM_ENCRYPTED, mode=0o600)
+    # The extremely common interactive-prompt idiom: no secret is ever typed, so no
+    # history-based criterion may match.
+    w(t, "home/alice/.bash_history", """\
+ls -la
+mysql -u root -p
+cd /var/log
+tail -f syslog
+""", mode=0o600)
+    # No .aws/credentials, .netrc, .pgpass etc. present at all -- the clean baseline.
+
+    empty("lnx-cred-files-001/nodata",
+          "Deliberately empty: no /etc/passwd, so no accounts or home directories can be\n"
+          "enumerated. Proves the check returns INSUFFICIENT_DATA rather than asserting no\n"
+          "credentials exist anywhere on the host.")
+
+
+# =========================================================================================
+# WIN-CRED-UNSECURED-001
+# =========================================================================================
+
+def wincred() -> None:
+    # Registry data (Winlogon, PuTTY) comes from the FakeRegistry in cred_win.go. The
+    # filesystem half (unattend.xml) is real fixture content.
+    t = "win-cred-unsecured-001/positive"
+    w(t, "C/Windows/Panther/Unattend.xml", """\
+<?xml version="1.0" encoding="utf-8"?>
+<unattend xmlns="urn:schemas-microsoft-com:unattend">
+  <settings pass="oobeSystem">
+    <component name="Microsoft-Windows-Shell-Setup">
+      <UserAccounts>
+        <AdministratorPassword>
+          <Value>FixtureOnlyNotARealSecretBase64==</Value>
+          <PlainText>false</PlainText>
+        </AdministratorPassword>
+      </UserAccounts>
+      <AutoLogon>
+        <Password>
+          <Value>fixtureNotARealSecret</Value>
+          <PlainText>true</PlainText>
+        </Password>
+        <Enabled>true</Enabled>
+        <Username>kiosk</Username>
+      </AutoLogon>
+    </component>
+  </settings>
+</unattend>
+""")
+
+    t = "win-cred-unsecured-001/negative"
+    # No unattend/sysprep file present at all -- the common post-setup state.
+    w(t, "C/Windows/System32/placeholder.txt", "fixture tree needs at least one file\n")
+
+    empty("win-cred-unsecured-001/nodata",
+          "Deliberately empty: no registry supplied (see cred_win.go Cases()) and no\n"
+          "unattend file present. Proves INSUFFICIENT_DATA when the registry is absent.")
+
+
 def main() -> int:
     if os.path.isdir(ROOT):
         shutil.rmtree(ROOT)
@@ -954,9 +1057,11 @@ def main() -> int:
     accounts()
     winservice()
     schtask()
+    wincred()
     history()
     logsink()
     hiddenartifacts()
+    credfiles()
 
     # Registry-only checks: the FakeRegistry lives next to the check, so the fixture tree
     # only has to exist. The note records where the data actually comes from, so a reviewer
