@@ -281,6 +281,87 @@ M3 per tactic: persistence 8/91, defense-impairment 2/35, stealth 0/141, credent
 
 ---
 
+## Phase 2a — Persistence (Linux and Windows) — **GATE PASSED**
+
+Six checks added, taking the inventory to **11**. Every one passes the full per-check quality
+gate (`check.EvaluateGate` plus its four executed test cases).
+
+| Check | ATT&CK (non-partial) | OS | Validation |
+|---|---|---|---|
+| `LNX-PERSIST-SHELLRC-001` | T1546.004, T1546 | linux | **LAB_VERIFIED** |
+| `LNX-PERSIST-RCSCRIPT-001` | T1037.004, T1037 | linux | **LAB_VERIFIED** |
+| `LNX-PERSIST-ACCOUNT-001` | T1136.001, T1136, T1098.007, T1098 (T1078.003 partial) | linux | **LAB_VERIFIED** |
+| `WIN-PERSIST-SERVICE-001` | T1543.003, T1543 | windows | FIXTURE_TESTED (B-001) |
+| `WIN-PERSIST-SCHTASK-001` | T1053.005, T1053 | windows | FIXTURE_TESTED (B-001) |
+| `WIN-PERSIST-REGLOADPOINT-001` | T1547.004, T1547.002, T1547.005, T1547, T1546.010, T1546.012, T1546, T1556.002 | windows | FIXTURE_TESTED (B-001) |
+
+Two reusable collectors were added, both deliberately derived from the registry and
+filesystem interfaces rather than from new native APIs — which is what keeps them
+fixture-testable under B-001:
+
+- `collect.WindowsServices` reads `HKLM\SYSTEM\CurrentControlSet\Services`, resolves
+  `ImagePath` quoting and the `\??\` / `\SystemRoot\` prefixes, and **also reads
+  `Parameters\ServiceDll`** — the svchost service-DLL hijack an ImagePath-only review misses.
+- `collect.WindowsScheduledTasks` parses Task Scheduler XML, decoding UTF-16LE/BE and UTF-8.
+
+`WIN-PERSIST-REGLOADPOINT-001` covers six sub-techniques in one check because they are one
+evidence shape (a named registry value compared against a documented default). Attribution
+is **per artifact**: the `Userinit` finding cites T1547.004 only, the `Notification Packages`
+finding cites T1556.002 only, the IFEO finding cites T1546.012 only. The positive fixture
+asserts all three independently.
+
+### Defects found and fixed in Phase 2a
+
+1. **Microsoft's own scheduled tasks are hidden AND run as SYSTEM.** `TASK-C3` as first
+   written fired on `\Microsoft\Windows\UpdateOrchestrator\Schedule Scan` and
+   `\Microsoft\Windows\Defrag\ScheduledDefrag` — i.e. on every Windows host. Caught by the
+   negative fixture. The criterion now additionally requires the task to be **outside** the
+   `\Microsoft\` namespace, and the Limitations section states plainly that this is noise
+   reduction, not a boundary: a task planted under `\Microsoft\Windows\` evades it.
+2. **A real false positive on the live host: Debian's `postgres` account.** The postgresql
+   package creates `postgres` with `/bin/bash`, so `ACCT-C3` fired on every PostgreSQL host.
+   Fixed with a documented known-shell-bearing-accounts list that applies **only** when the
+   account is not uid 0 and not in a privileged group, so it cannot launder a backdoor named
+   after a service; the account still appears in Inventory.
+3. **Go's XML decoder rejected real Task Scheduler files.** Task XML declares
+   `encoding="UTF-16"`, which `encoding/xml` refuses without a `CharsetReader` even after the
+   bytes have been converted. Fixed with a pass-through `CharsetReader`. Without this, every
+   real task file would have been reported as a parse error.
+4. **Scheduled-task criterion inspected only `<Command>`.** The usual shape is
+   `Command=powershell.exe` with the staged payload path in `<Arguments>`, so the
+   transient-directory criterion missed it. Now evaluated against the full action, while
+   still only descending into arguments for known interpreters so a task that merely *writes*
+   to `%TEMP%` does not match (that case is in the negative fixture).
+5. **The read-only guard test was too crude.** It banned the substring `lsass`, and so failed
+   on documentation prose explaining why LSA registry load points matter. Naming a process in
+   a comment is not reading its memory; the guard now bans the actual APIs
+   (`OpenProcess`, `ReadProcessMemory`, `MiniDumpWriteDump`, `process_vm_readv`, `ptrace`,
+   `/proc/self/mem`).
+
+### Real-host validation (live WSL2 Kali, unprivileged)
+
+`scan_id irscan-20261014T051011Z-46209192`, 7 Linux checks executed, **598 inventory items,
+0 findings, 0 false positives**. Outcomes: `NOT_DETECTED=2, PARTIAL_DATA=4,
+INSUFFICIENT_DATA=1`; M6 = 2/7 = 28.6%. The four `PARTIAL_DATA` results are genuine and
+correctly explained (`/etc/shadow`, `/root/.ssh`, `/var/spool/cron/crontabs` and other users'
+dotfiles are unreadable without root).
+
+### Coverage after Phase 2a
+
+| Metric | Phase 1 | Phase 2a |
+|---|---|---|
+| M3 implementation coverage | 10/296 = 3.4% | **25/296 = 8.4%** |
+| M4 partial coverage | 2/296 | 3/296 = 1.0% |
+| M5 validation (LAB_VERIFIED) | 4/5 = 80.0% | **7/11 = 63.6%** (FIXTURE_TESTED 4/11 beside it, never added in) |
+
+M3 per tactic: **persistence 23/91**, defense-impairment 2/35, stealth 0/141,
+credential-access 0/58. (technique, OS) pairs: linux 15/167, windows 13/269.
+
+M5 *fell* in percentage terms because the three new Windows checks cannot be lab verified
+under B-001. That is the honest direction for that metric and it is not adjusted.
+
+---
+
 ## Blockers carried forward
 
 | ID | Blocker | Effect |

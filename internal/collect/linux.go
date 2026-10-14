@@ -624,6 +624,56 @@ func Users(fs FileSystem) ([]UserAccount, SourceResult) {
 	return out, res
 }
 
+// Group is one /etc/group entry.
+type Group struct {
+	Name    string
+	GID     string
+	Members []string
+}
+
+// Groups parses /etc/group.
+//
+// Note the deliberate limitation: /etc/group lists SUPPLEMENTARY members only. A user whose
+// PRIMARY group is a privileged group does not appear in its member list, so membership
+// derived from here is incomplete and checks must say so rather than implying completeness.
+func Groups(fs FileSystem) ([]Group, SourceResult) {
+	res := SourceResult{Name: "/etc/group", Privilege: "none (world-readable)"}
+	data, truncated, err := fs.ReadFile("/etc/group")
+	if err != nil {
+		res.Available = false
+		if errors.Is(err, ErrPermission) {
+			res.Reason = "permission denied reading /etc/group"
+		} else {
+			res.Reason = fmt.Sprintf("cannot read /etc/group: %v", err)
+		}
+		return nil, res
+	}
+	if truncated {
+		res.Truncated = true
+	}
+	var out []Group
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		p := strings.Split(line, ":")
+		if len(p) < 4 {
+			continue
+		}
+		g := Group{Name: p[0], GID: p[2]}
+		for _, mem := range strings.Split(p[3], ",") {
+			if mem = strings.TrimSpace(mem); mem != "" {
+				g.Members = append(g.Members, mem)
+			}
+		}
+		out = append(out, g)
+	}
+	res.Available = true
+	res.ItemsSeen = len(out)
+	return out, res
+}
+
 func passwordState(field string) string {
 	switch {
 	case field == "":

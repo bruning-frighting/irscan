@@ -21,11 +21,19 @@ import (
 // Asserting the expected set by name turns that class of silent disappearance into a test
 // failure. Adding a check means adding it here deliberately.
 var expectedChecks = []string{
+	// Phase 1 pilot
 	"LNX-DEFIMP-AUDITD-001",
 	"LNX-PERSIST-CRON-001",
 	"LNX-PERSIST-SSHKEY-001",
 	"LNX-PERSIST-SYSTEMD-001",
 	"WIN-PERSIST-RUNKEY-001",
+	// Phase 2a persistence
+	"LNX-PERSIST-ACCOUNT-001",
+	"LNX-PERSIST-RCSCRIPT-001",
+	"LNX-PERSIST-SHELLRC-001",
+	"WIN-PERSIST-REGLOADPOINT-001",
+	"WIN-PERSIST-SCHTASK-001",
+	"WIN-PERSIST-SERVICE-001",
 }
 
 func TestExpectedChecksAreRegistered(t *testing.T) {
@@ -139,11 +147,17 @@ func TestCollectorsAndChecksAreReadOnly(t *testing.T) {
 }
 
 // TestNoSensitiveProcessMemoryAccess guards the explicit prohibition on reading sensitive
-// process memory. A host-facing collector must never reference LSASS or /proc/<pid>/mem.
+// process memory.
+//
+// The banned set is deliberately the set of APIs and pseudo-file paths that actually open
+// process memory, NOT the word "lsass". An earlier version banned the substring "lsass" and
+// failed on documentation prose explaining that LSA registry load points are valuable
+// because LSASS handles credentials -- which is exactly the kind of explanation an analyst
+// needs. Naming a process in a comment is not reading its memory; calling OpenProcess is.
 func TestNoSensitiveProcessMemoryAccess(t *testing.T) {
 	banned := []string{
-		"lsass", "MiniDumpWriteDump", "OpenProcess", "ReadProcessMemory",
-		"/proc/self/mem", "process_vm_readv",
+		"MiniDumpWriteDump", "OpenProcess", "ReadProcessMemory", "NtReadVirtualMemory",
+		"process_vm_readv", "/proc/self/mem", "ptrace",
 	}
 	dirs := []string{filepath.Join("..", "collect"), filepath.Join("..", "check"), "."}
 	for _, dir := range dirs {

