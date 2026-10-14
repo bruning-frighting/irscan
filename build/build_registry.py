@@ -25,6 +25,7 @@ ROOT = os.path.dirname(HERE)
 LOCK = os.path.join(HERE, "sources.lock.json")
 OVERLAY = os.path.join(ROOT, "data", "overlay")
 OUT = os.path.join(ROOT, "data", "registry")
+EMBED = os.path.join(ROOT, "internal", "registry", "embedded", "registry_embed.json")
 
 
 def _default_stix_path():
@@ -38,6 +39,8 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stix", default=None, help="path to the pinned STIX bundle")
     ap.add_argument("--out", default=OUT)
+    ap.add_argument("--embed-out", default=EMBED,
+                    help="compact registry written into the Go package tree for //go:embed")
     ap.add_argument("--check-determinism", action="store_true")
     args = ap.parse_args(argv)
 
@@ -47,7 +50,7 @@ def main(argv=None):
               file=sys.stderr)
         return 3
 
-    result = builder.build(stix, LOCK, OVERLAY, args.out)
+    result = builder.build(stix, LOCK, OVERLAY, args.out, args.embed_out)
     _report(result, args.out)
 
     if args.check_determinism:
@@ -55,8 +58,10 @@ def main(argv=None):
         tmp_a = tempfile.mkdtemp(prefix="irscan-reg-a-")
         tmp_b = tempfile.mkdtemp(prefix="irscan-reg-b-")
         try:
-            a = builder.build(stix, LOCK, OVERLAY, tmp_a)["hashes"]
-            b = builder.build(stix, LOCK, OVERLAY, tmp_b)["hashes"]
+            a = builder.build(stix, LOCK, OVERLAY, tmp_a,
+                              os.path.join(tmp_a, "registry_embed.json"))["hashes"]
+            b = builder.build(stix, LOCK, OVERLAY, tmp_b,
+                              os.path.join(tmp_b, "registry_embed.json"))["hashes"]
             same = a == b
             for name in sorted(set(a) | set(b)):
                 mark = "OK  " if a.get(name) == b.get(name) else "DIFF"

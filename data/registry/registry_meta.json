@@ -57,6 +57,7 @@
     "attack_registry.csv": "098c56f7599514d4b354f027c87f680a5f206f27f5e0bcc04b9369a3c94cb2c0",
     "attack_registry.json": "c7be7ff4f8d690ea6cbabbab2eacdbf10680a8c073e6049d9c585ee3b17d4c83",
     "classification_audit.csv": "c6cce454cd41d5a340a6318b68ebce4d7a81518eafe224c14a4c0963189fddc9",
+    "registry_embed.json": "3a8c1fbc04274eb241789f23b50bbd27337dd0711caa4beb3c30b10938caf076",
     "revoked_deprecated.csv": "4e44cd3f0c068327a65e3c47f5c4b331023fc49f62a967e9abd3798d3b594154"
   },
   "parse_anomalies": [],

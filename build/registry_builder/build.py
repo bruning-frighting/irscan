@@ -23,7 +23,7 @@ def _load_json(path):
         return json.load(fh)
 
 
-def build(stix_path, lock_path, overlay_dir, out_dir):
+def build(stix_path, lock_path, overlay_dir, out_dir, embed_path=None):
     lock = _load_json(lock_path)
     taxonomy = _load_json(os.path.join(overlay_dir, "log_source_taxonomy.json"))
     families = _load_json(os.path.join(overlay_dir, "technique_families.json"))
@@ -193,6 +193,41 @@ def build(stix_path, lock_path, overlay_dir, out_dir):
             for r in audit
         ],
     )
+
+    # --- compact registry for Go //go:embed -------------------------------------------
+    # Same single source of truth as attack_registry.json, but without the review-only fields
+    # (log sources, detection strategies, data components, long reasons). Written into the Go
+    # package tree because //go:embed cannot reach outside its own package directory.
+    if embed_path:
+        embed = {
+            "schema_version": SCHEMA_VERSION,
+            "source": {
+                "version": pinned["version"],
+                "sha256": pinned["sha256"],
+                "url": pinned["url"],
+                "retrieved_at": pinned["retrieved_at"],
+                "attribution": pinned["license"]["required_attribution"],
+            },
+            "scope": registry["scope"],
+            "tactics": tactics,
+            "counts": counts,
+            "techniques": [
+                {
+                    k: r[k]
+                    for k in (
+                        "technique_id", "name", "tactics", "tactic_ids", "platforms",
+                        "os_scope", "is_subtechnique", "parent_id", "active", "revoked",
+                        "deprecated", "revoked_by_id", "in_registry_scope",
+                        "in_implementation_scope", "testability_class",
+                        "baseline_implementation_status",
+                        "baseline_implementation_rationale",
+                        "url",
+                    )
+                }
+                for r in records
+            ],
+        }
+        hashes["registry_embed.json"] = emit.write_json(embed_path, embed)
 
     meta = {
         "schema_version": SCHEMA_VERSION,

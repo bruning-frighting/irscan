@@ -148,7 +148,136 @@ Data quality: **0 parse anomalies, 0 unclassified log sources.**
 
 ---
 
-## Phase 1 — Skeleton and pilot — NOT STARTED
+## Phase 1 — Skeleton and pilot — **GATE PASSED**
+
+### What was built
+
+~9,700 lines of Go (36 files, standard library only) plus ~1,850 lines of build-time Python.
+
+| Package | Lines | Role |
+|---|---|---|
+| `internal/model` | 604 | Data contracts; **enforces** "missing data is never NOT_DETECTED" |
+| `internal/safety` | 199 | Limits, budgets, timeouts, write-confinement guard, network-FS detection |
+| `internal/collect` | 2,492 | Collector interfaces, root-relocatable FS, Linux collectors, Windows registry, fakes |
+| `internal/check` | 1,011 | Check interface, Env, quality gate, mapping validator, evidence helpers |
+| `internal/checks` | 3,087 | The five pilot checks + the gate/invariant test suite |
+| `internal/registry` | 210 | Embedded ATT&CK registry loader |
+| `internal/coverage` | 414 | The six metrics |
+| `internal/report` | 594 | Three separate reports + evidence and scan manifests |
+| `internal/module` | 390 | Module interface, attack module, not-implemented malware module |
+| `internal/allowlist` | 167 | Scoped, expiring, non-silent suppression |
+| `cmd/irscan` | 537 | CLI |
+
+### The five pilot checks
+
+| Check | ATT&CK | OS | Kind | Validation |
+|---|---|---|---|---|
+| `LNX-PERSIST-SYSTEMD-001` | T1543.002, T1543, T1053.006(partial) | linux | artifact | **LAB_VERIFIED** |
+| `LNX-PERSIST-CRON-001` | T1053.003, T1053 | linux | artifact | **LAB_VERIFIED** |
+| `LNX-PERSIST-SSHKEY-001` | T1098.004, T1098 | linux | artifact | **LAB_VERIFIED** |
+| `LNX-DEFIMP-AUDITD-001` | T1685.004, T1685 | linux | **telemetry** | **LAB_VERIFIED** |
+| `WIN-PERSIST-RUNKEY-001` | T1547.001, T1547, T1112(partial) | windows | artifact | FIXTURE_TESTED (capped by B-001) |
+
+### Gate evidence
+
+1. **All pilot checks pass all four test cases.** 5 checks × 4 cases = 20 case assertions, plus
+   7 supporting tests. `go test ./...` → `ok irscan/internal/checks`. The gate is
+   **machine-verified**: each check supplies its four cases as data and a generic runner
+   executes them, so a check cannot self-certify. `check.EvaluateGate` additionally verifies
+   overlay completeness, documented privileges and failure modes, escalation criteria,
+   false-positive handling and an honest validation status.
+2. **The Linux binary runs.** `dist/irscan-linux-amd64` executed against the **live** WSL2
+   Kali root filesystem, unprivileged (uid 1000), scan_id
+   `irscan-20261014T044834Z-7b0a0cd0`. Result: 441 real systemd units and 89 real cron
+   entries inventoried, 0 false positives, outcomes `NOT_DETECTED=1, PARTIAL_DATA=2,
+   INSUFFICIENT_DATA=1`.
+3. **The Windows binary is built and statically checked only.** `GOOS=windows go build` and
+   `GOOS=windows go vet` both pass; `dist/irscan-windows-amd64.exe` is produced.
+   **It has never been executed** — Smart App Control blocks unsigned binaries on the only
+   Windows host available (B-001). This limit is stated in the README, in `M5`'s note, and
+   enforced by `TestWindowsChecksAreNotLabVerified`.
+4. **Effort per pilot check** — measured as source size and defects found. Wall-clock
+   authoring time was *not* instrumented, so none is claimed.
+
+   | Check | impl. lines | defects found by its own fixtures / lab run |
+   |---|---|---|
+   | systemd | ~380 (in `persist_lnx.go`, 728 total with cron) | 2 (symlink mode bits; masked units) |
+   | cron | ~350 (same file) | 2 (whole-command `/tmp` match; `perl -e` pattern) |
+   | sshkey | 349 | 1 (denied-vs-absent in home directories) |
+   | auditd | 581 | 1 (criteria evaluated against unread data) |
+   | runkey | 530 | 1 (Startup folder is itself under `%ProgramData%`) |
+
+   Shared: `common.go` 315, test suite 584, fixtures 50 files.
+
+### Defects found and fixed in Phase 1
+
+Every one of these was found by a test case or the real-host run, not by inspection.
+
+1. **Windows check silently excluded from the build (most serious).** The check lived in
+   `internal/checks/persist_windows.go`; Go treats a `_windows.go` filename suffix as an
+   implicit `GOOS` build constraint, so the file was dropped from the Linux build, the check
+   was never registered, and the gate suite passed while testing **4 of 5** checks. Nothing
+   errored. Fixed by renaming to `persist_win.go`, and locked in by two new tests:
+   `TestExpectedChecksAreRegistered` (asserts the inventory by name) and
+   `TestNoAccidentalPlatformConstrainedCheckFiles` (rejects the filename pattern).
+2. **False positives manufactured from unreadable data.** The auditd check concluded
+   "configured but no rules" when the truth was "`/etc/audit` is mode 0750 and this scan is
+   unprivileged". Caught by the permission-denied fixture. Fixed by having the collector
+   distinguish *read it, found nothing* from *could not read it*
+   (`ConfigReadable`, `RuleFilesRead`, `LogStateKnown`, `PermissionError`) and gating every
+   criterion on it.
+3. **43 false positives on a clean host: symlink permission bits.** A symlink's own mode is
+   always `lrwxrwxrwx`, so the world-writable criterion fired on every symlinked unit.
+4. **6 false positives on a clean host: masked units.** `/etc/systemd/system/X.service ->
+   /dev/null` is systemd's standard way to **disable** a unit — the opposite of persistence —
+   and was being reported as vendor shadowing.
+5. **1 false positive on a clean host: stock Debian `apt-compat`.** `eval $(apt-config shell
+   ...)` matched the encoded-execution pattern. Narrowed to `eval $(curl|wget|fetch ...)`.
+6. **Negative-fixture precision bugs, caught before the lab run.** Matching `/tmp` anywhere
+   in a command flagged the benign `curl -s -o /tmp/metrics.json` monitoring pattern; and
+   `perl -e 'sleep int(rand(43200))'` (the real certbot cron line) matched the interpreter
+   clause. Both narrowed to inspect the *executable*, not the whole command string.
+7. **Misleading `PARTIAL_DATA` reason.** The report said "truncated by safety limit" when the
+   real cause was a permission denial. Split into distinct `Truncated` and `Incomplete`
+   source states so the analyst is told the true cause of a visibility gap.
+8. **`Exists()` collapsed denied and absent.** An unprivileged scan of root's `0700` home
+   reported "no SSH keys" instead of "could not look". Now uses `Stat` and branches on
+   `ErrPermission`.
+
+   False positives on the live host: **44 → 0**, with every fixture positive still detecting.
+
+### Observed real-host behaviour (the point of the lab run)
+
+| Check | Outcome | Why — exactly as reported by the tool |
+|---|---|---|
+| `LNX-PERSIST-SYSTEMD-001` | `NOT_DETECTED` | 441 units read in full; nothing matched |
+| `LNX-PERSIST-CRON-001` | `PARTIAL_DATA` | "partially readable: cron tables" — genuine denial on `/var/spool/cron/crontabs` |
+| `LNX-PERSIST-SSHKEY-001` | `PARTIAL_DATA` | `/etc/shadow` and `/root/.ssh` unreadable unprivileged |
+| `LNX-DEFIMP-AUDITD-001` | `INSUFFICIENT_DATA` | audit subsystem genuinely absent — **real** confirmation of the no-data path |
+
+M6 for that scan: **1/4 = 25.0%** (denominator: checks executed). Three of four checks could
+not give a determinate answer on a stock unprivileged host — which is the honest picture of
+what retrospective host scanning sees, and precisely what the metric exists to show.
+
+### Coverage at end of Phase 1 (computed by the tool, not by hand)
+
+| Metric | Value |
+|---|---|
+| M1 registry completeness | 867/867 = 100.0% (U_bundle = 867) |
+| M2 classification completeness | 511/511 = 100.0% (U_host = 511) |
+| M3 implementation coverage | **10/296 = 3.4%** (U_impl = 296) |
+| M4 partial coverage | 2/296 = 0.7% (U_impl = 296) |
+| M5 validation coverage (LAB_VERIFIED) | 4/5 = 80.0% — beside it, not added in: FIXTURE_TESTED 1/5, UNTESTED 0/5 |
+| M6 runtime data availability | per scan; 1/4 on the run above |
+
+M3 per tactic: persistence 8/91, defense-impairment 2/35, stealth 0/141, credential-access
+0/58. These numbers are low and are not padded.
+
+### Built artefacts
+
+`dist/irscan-linux-amd64` and `dist/irscan-windows-amd64.exe`, built reproducibly with
+`-trimpath` from Go 1.27.2 in WSL2; hashes in `dist/SHA256SUMS`. The Windows binary is
+**unverified at runtime**.
 
 ---
 
