@@ -509,6 +509,19 @@ classified all 511. What Phase 2d did:
    work."* Regenerated the registry, re-verified the determinism gate still passes with the
    new text, rebuilt both binaries against the refreshed embed, reran the full test suite and
    the real-host scan — all identical in behavior, only the rationale prose changed.
+
+   Consequence for the Phase 0 table above: regenerating the registry changed the rationale
+   text embedded in `attack_registry.json`, `classification_audit.csv` and `registry_meta.json`,
+   which changes their hashes even though every count is unchanged. That table records the
+   hashes as they were at the end of Phase 0, before this regeneration -- it is a historical
+   record, not the current state. As of this regeneration the hashes are: `attack_registry.json`
+   `54e9459062b9ea06515c0ba758a50099bb8760ee89aaa5acf18c410ebc3b2960`,
+   `classification_audit.csv` `a5c7658ef4369de8bbd3709972b42d1d06fab35276d3115f7b1af73bb0ba4e42`,
+   `registry_meta.json` `4ce57e800483ef4a8db07911b0f17a6dc75aecde7fb68b1018d1f694c9d1dea0`.
+   `attack_registry.csv` and `revoked_deprecated.csv` are unaffected (unchanged hashes) because
+   the rationale text that changed isn't part of either CSV. (Recorded during the independent
+   review pass, 2026-10-14, by re-running `python build/build_registry.py --check-determinism`
+   and hashing `data/registry/*` directly.)
 3. **Spot-checked honesty of the `UNSUPPORTED` classifications** rather than trusting the
    rule engine blindly. Within `U_host` (511), only **3 techniques are `UNSUPPORTED`**:
    `T1213.002` SharePoint, `T1698` Indirect Prompt Injection, `T1699` Direct Prompt Injection
@@ -589,6 +602,97 @@ same as the output being right.
 - Gap count: **472** = 511 (`U_host`) − 39 (effectively `IMPLEMENTED`), matching M3 exactly.
 - Spot-checked several `PARTIAL` rows (`T1053.006`, `T1070.003`, `T1078.003`) — each correctly
   names the specific check providing partial coverage and states why it's excluded from M3.
+
+---
+
+## Independent adversarial review — **COMPLETE**
+
+Performed by a **separate agent** with no prior involvement in building the tool, per the
+task's requirement to delegate the review rather than self-certify. It was briefed to verify,
+not confirm: re-run the full suite, recompute every coverage number itself from source (not
+trust the tool's own printout), check for a self-certification path in the implementation
+gate, spot-check ATT&CK IDs/names/platforms against the raw pinned STIX bundle, confirm no
+`LAB_VERIFIED` check was fixture-only, and audit read-only-ness across the *entire* `internal/`
+and `cmd/` tree (not just the three directories the existing test covers).
+
+### Result on each of the six required checks
+
+1. **Full test suite** — pass. 19 checks × 4 cases = 76 subtests, plus 9 supporting tests, all
+   passing and confirmed non-vacuous by reading their source (e.g. `TestWindowsChecksAreNotLabVerified` actually iterates conditionally rather than trivially passing).
+   **Gap noted, left open**: only `internal/checks` has test files; `internal/coverage`,
+   `internal/report`, `internal/registry`, `internal/module`, `internal/safety`,
+   `internal/allowlist` and `cmd/irscan` have none. Correct and worth recording as a limitation
+   — those packages are presently exercised only by manual review and real-host runs, not CI.
+2. **Coverage recomputed independently** — exact match. The reviewer extracted all 56
+   `TechniqueMapping` entries directly from `internal/checks/*.go` source (not the built
+   binary) and independently derived M1–M5, every per-tactic and per-OS breakdown — all
+   matched the tool's own printout and `STATUS.md`'s prose to the digit.
+3. **No self-certification path to IMPLEMENTED** — confirmed. `coverage.effectiveStatus` is
+   the only function that can return `model.Implemented`, and it only does so for a
+   `CheckRef` with `GatePassing && !Partial`, where `GatePassing` is computed fresh per report
+   from `check.EvaluateGate`, never read from a check's own declaration.
+4. **ATT&CK ID/name/platform spot-check** — 32 technique IDs checked directly against the raw
+   STIX bundle (more than double the 15 required), covering every scope tactic and both OSes,
+   plus the revoked `T1562`/`T1562.002` sanity case. Zero mismatches.
+5. **No fixture-only `LAB_VERIFIED` claim** — confirmed. All 11 `LAB_VERIFIED` checks are
+   Linux-only with specific, checkable `LabEvidence`. The reviewer ran the Linux binary fresh
+   against the live WSL2 host themselves and confirmed all 11 appear in that run's
+   `scan_manifest.json`, and that the one real finding (`.bash_history` credential idiom) still
+   matches what Phase 2c recorded, with secrets still correctly redacted.
+6. **Read-only** — confirmed via a full-tree grep (broader than the existing
+   `TestCollectorsAndChecksAreReadOnly`, which only scans three directories). Two write-capable
+   calls exist in the whole `internal/`+`cmd/` tree, both in `internal/report/report.go`
+   (`MkdirAll`, `WriteFile`), both gated through `safety.OutputGuard.Check()`. No `exec.Command`
+   anywhere. The Windows registry reader opens `KEY_READ` only.
+
+### Defects found and fixed
+
+1. **Dead boolean condition in M1** (`internal/coverage/coverage.go`): `len(t.Platforms) >= 0`
+   can never be false, so that conjunct silently validated nothing. Fixed to `> 0`. Confirmed
+   it had zero effect on the current M1 value (867/867 — no technique in the bundle actually
+   has an empty platform list), but it was a real logic bug, not just a style issue.
+2. **Self-contradicting count in `RELEASE_NOTES.md`**: said "10 of 19... LAB_VERIFIED" in prose
+   two lines above a table correctly stating "11/19 = 57.9%". 11 is correct (independently
+   re-verified above). Fixed the prose.
+3. **Tracked `dist/` breaking binary-level reproducibility** (the most substantive finding).
+   `README.md`/`PLAN.md` both describe `dist/` as "git-ignored, build-time only", but the
+   `.gitignore` entry was never actually added, so three built files were committed during
+   earlier phases. Because they were tracked, every rebuild changed tracked content, and Go's
+   default `-buildvcs=true` stamps a `vcs.modified` flag read from `git status` — which
+   flipped depending on prior build state. The reviewer proved this empirically: three
+   consecutive `go.sh dist` runs from byte-identical source produced **three different Linux
+   binary hashes**. They added `dist/` to `.gitignore` (stopping further drift) but correctly
+   left the git-index operation (`git rm --cached`) and the `go build` flag change to me,
+   flagging both as remaining. I completed both afterward: ran
+   `git rm -r --cached dist/`, added `-buildvcs=false` to `build/go.sh dist` (version/commit
+   are already stamped explicitly via `-ldflags`, so nothing is lost), and **re-verified by
+   running three consecutive builds myself** — all three now produce byte-identical hashes for
+   both binaries. The `RELEASE_NOTES.md` and gate-evidence hashes throughout this document were
+   re-captured after this fix.
+4. **Stale registry hashes in the Phase 0 table above** (found by the reviewer, independently
+   re-verified by me afterward by re-running `python build/build_registry.py
+   --check-determinism` and comparing the printed hashes byte-for-byte against the note added
+   to Phase 2d): Phase 2d's rationale-text change altered `attack_registry.json`,
+   `classification_audit.csv` and `registry_meta.json`'s hashes (counts unchanged) after the
+   Phase 0 table was written. The Phase 0 table is left as a historical record; the current
+   hashes are noted inline in Phase 2d.
+
+All four fixes were re-verified end-to-end after being applied: `go build`/`go vet`/`go test`
+all still pass, a fresh real-host scan against live WSL2 Kali still produces the same 11
+checks run / 1 finding / 607 inventory items as before, and `irscan attack --report coverage`
+still prints M1=867/867, M2=511/511, M3=39/296, M4=5/296, M5=11/19 — identical to pre-review.
+
+### Overall verdict (reviewer's own words, independently re-checked by me)
+
+> "STATUS.md's substantive claims are honest and accurate... The defects I found are real but
+> narrow: one dead boolean condition (no numeric effect), one self-contradicting sentence in
+> release notes, and a build-hygiene gap... that the project's own Phase 0 determinism gate
+> doesn't cover because that gate is scoped to the registry, not the binary. None of these
+> inflate coverage, fake validation, or hide a check — which is the class of dishonesty this
+> review was most meant to catch."
+
+I concur with this verdict after independently re-verifying the reviewer's four fixes and the
+hash claims underlying them.
 
 ---
 

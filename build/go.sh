@@ -50,10 +50,16 @@ case "$cmd" in
     VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0-dev")
     COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
     LD="-s -w -X main.version=$VERSION -X main.commit=$COMMIT"
+    # -buildvcs=false: Go's default VCS stamping embeds a vcs.modified flag read from
+    # `git status`. dist/ was accidentally tracked in git in earlier phases (fixed by the
+    # independent review pass), so every rebuild made the working tree look "dirty" to Go
+    # relative to the previously committed binary, and three consecutive builds from
+    # byte-identical source produced three different hashes. Disabling VCS stamping removes
+    # that nondeterminism; version/commit are already stamped explicitly via -ldflags above.
     echo "== linux/amd64 =="
-    GOOS=linux  GOARCH=amd64 "$GO" build -trimpath -ldflags "$LD" -o dist/irscan-linux-amd64 ./cmd/irscan || exit 1
+    GOOS=linux  GOARCH=amd64 "$GO" build -trimpath -buildvcs=false -ldflags "$LD" -o dist/irscan-linux-amd64 ./cmd/irscan || exit 1
     echo "== windows/amd64 =="
-    GOOS=windows GOARCH=amd64 "$GO" build -trimpath -ldflags "$LD" -o dist/irscan-windows-amd64.exe ./cmd/irscan || exit 1
+    GOOS=windows GOARCH=amd64 "$GO" build -trimpath -buildvcs=false -ldflags "$LD" -o dist/irscan-windows-amd64.exe ./cmd/irscan || exit 1
     ( cd dist && sha256sum irscan-linux-amd64 irscan-windows-amd64.exe > SHA256SUMS && cat SHA256SUMS )
     ;;
   *)

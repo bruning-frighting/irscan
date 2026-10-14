@@ -173,7 +173,7 @@ func Compute(reg *registry.Registry, checks []check.Check, results []model.Check
 	m1num := 0
 	for i := range reg.Techniques {
 		t := &reg.Techniques[i]
-		ok := t.ID != "" && t.Name != "" && len(t.Platforms) >= 0
+		ok := t.ID != "" && t.Name != "" && len(t.Platforms) > 0
 		if t.Active && len(t.Tactics) == 0 {
 			ok = false
 		}

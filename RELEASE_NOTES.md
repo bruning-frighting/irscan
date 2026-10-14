@@ -2,20 +2,24 @@
 
 ## v0.1.0-phase1 — 2026-10-14
 
-First working build, produced in one development session through Phases 0–2d of
-`PLAN.md`. Phase 3 (this document, final README, CLI polish) and the independent review pass
-are the last steps before the session's final report. **Not production-ready** — see
-`README.md` "Validation status" and `DECISIONS.md` for blockers.
+First working build, produced in one development session through Phases 0–2d of `PLAN.md`,
+followed by Phase 3 and an independent adversarial review pass by a separate agent. **Not
+production-ready** — see `README.md` "Validation status" and `DECISIONS.md` for blockers.
 
 ### Binaries
 
 Built reproducibly with `bash build/go.sh dist` from Go 1.27.2 (`linux/amd64`, cross-compiling
-the Windows target), `-trimpath`, version/commit stamped via `-ldflags`.
+the Windows target), `-trimpath -buildvcs=false`, version/commit stamped via `-ldflags`.
+`-buildvcs=false` is deliberate: `dist/` was accidentally committed to git in earlier phases
+(caught and fixed by the independent review — see `STATUS.md`), which made Go's default VCS
+stamping embed a flipping `vcs.modified` flag and produce a different hash on every rebuild
+from identical source. With it fixed, three consecutive rebuilds from the same source produce
+byte-identical output — verified directly, not assumed.
 
 | File | SHA-256 |
 |---|---|
-| `dist/irscan-linux-amd64` | `bee8219583757e6932f40d1d270d15f8d6a8ae8e5158590b88909e940484c296` |
-| `dist/irscan-windows-amd64.exe` | `4883ab1b4668ef3d7e7e1ab1309221b31b26169e51e916db00cc7ed07f6cce54` |
+| `dist/irscan-linux-amd64` | `06ad42f75bfc04ba02395541ed71be25b4686dec0212c94a86b718f25e4784e4` |
+| `dist/irscan-windows-amd64.exe` | `6cc1a3f50a691fdc2582ef4fc8ae1c7c13e3a8cbc70d1b49964f90b572fb7e88` |
 
 The Linux binary has been **executed** against a live host (WSL2 Kali GNU/Linux Rolling
 2026.1, unprivileged) — see `STATUS.md` for every recorded run. The Windows binary has been
@@ -37,7 +41,7 @@ MITRE ATT&CK Enterprise **v20.0** (STIX 2.1), pinned, hash-verified, attributed 
 | Windows | 8 | persistence, defense-impairment, credential-access |
 
 Full list with ATT&CK mappings, validation status and lab evidence: `STATUS.md` Phases 1–2c.
-10 of 19 checks are `LAB_VERIFIED` (all on Linux, against a real host); the remaining 9
+11 of 19 checks are `LAB_VERIFIED` (all on Linux, against a real host); the remaining 8
 (all Windows) are `FIXTURE_TESTED`, capped by B-001.
 
 ### Coverage (computed by `irscan attack --report coverage`, not hand-maintained)
