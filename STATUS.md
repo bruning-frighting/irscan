@@ -696,6 +696,86 @@ hash claims underlying them.
 
 ---
 
+## Persistence-tactic deep audit (requested follow-up, 2026-10-14)
+
+Requested explicitly: is Persistence coverage complete, and does the detection *logic* match
+what MITRE's own Analytic / Detection Strategy objects (the `x-mitre-analytic` /
+`x-mitre-detection-strategy` STIX objects new in v20.0) actually recommend? Done by direct
+data comparison, not inspection by eye: a script filtered the pinned registry for every
+technique carrying the `persistence` tactic and applicable to Windows/Linux, cross-referenced
+against the exact `TechniqueMapping` entries extracted from `internal/checks/*.go` source, and
+a second script dumped the real `detection_strategies` + `log_sources` fields the registry
+carries per technique (sourced from MITRE's own `x-mitre-analytic` objects) for every
+technique this tool claims to cover.
+
+### 1. Registry completeness vs. MITRE — confirmed correct
+
+Live `https://attack.mitre.org/tactics/TA0003/` lists **22** top-level Persistence techniques.
+The pinned registry has **20** applicable to Windows/Linux. The two missing —
+`T1671` Cloud Application Integration (`platforms: [Office Suite, SaaS]`) and `T1525` Implant
+Internal Image (`platforms: [Containers, IaaS]`) — are confirmed correctly excluded: neither
+applies to a Windows/Linux host scan, and both are classified `NOT_APPLICABLE` by the one
+honest route to that status (platform mismatch), not by difficulty. Registry completeness for
+Persistence: **confirmed, 20/20.**
+
+### 2. Coverage count — 26 of 91 Persistence techniques, confirmed by direct extraction
+
+`U_host ∩ persistence` = **91** techniques. Extracting `TechniqueMapping` entries straight from
+source (not trusting memory of what was built) gives **26** distinct technique IDs covered
+(non-partial), across 10 checks (6 Linux, 4 Windows). This matches the tool's own
+`persistence 23/91` M3 figure once revoked-mapping and partial-only entries are excluded
+correctly (23 non-partial IDs land inside `U_impl`'s stricter implementation-scope filter; the
+26 above is the broader "any non-partial mapping" count before that filter, which is the right
+number for a tactic-scoped audit).
+
+### 3. Detection logic vs. MITRE's own Analytic/Detection Strategy data
+
+For all ~19 covered sub-techniques, MITRE's own `detection_strategies`/`log_sources` fields were
+pulled directly from the registry and read side-by-side with each check's actual logic.
+Two findings:
+
+- **Thematic, not a bug, but worth stating plainly: every MITRE detection strategy for these
+  techniques is primarily TELEMETRY-based** (Sysmon EventCode 1/6/7/11/13/14, Security 4657/
+  4697/4698/4702/4720/4728.../4624, `auditd:SYSCALL`/`EXECVE`), while every `irscan` persistence
+  check is ARTIFACT-based (reads current on-disk/registry state). This is the correct and
+  honest consequence of `testability_class: MIXED` for all of them — both an artifact and a
+  telemetry signal exist per MITRE's own data, and this build has so far implemented only the
+  artifact half. Each check's `Limitations` already says this explicitly (e.g. "only Sysmon
+  registry events... would show it, and neither may be enabled") — the audit's contribution is
+  confirming that statement is accurate for every single covered technique, not just the ones
+  it was written for, and that no check is *silently* missing a telemetry cross-check it could
+  easily add. **No check queries `env.Telemetry` for technique-specific corroboration today**;
+  the one telemetry-based check (`LNX-DEFIMP-AUDITD-001`) checks audit-subsystem *health*, not
+  per-technique event content. This is accurately scoped as a real, named limitation, not
+  something misrepresented as covered.
+- **Concrete, fixed: `T1547.004` Winlogon Helper DLL.** MITRE's Detection Strategy `DET0404`
+  names three Winlogon registry locations to watch: *"Shell, Notify, or Userinit."*
+  `WIN-PERSIST-REGLOADPOINT-001` read Shell and Userinit but never `Notify`. Fixed: added
+  `HKLM\...\Winlogon\Notify\<package>` (`DLLName` value) to the check's `loadPoints` table,
+  using the same subkey-enumeration shape already built for Image File Execution Options
+  (`NoLegitimateDefault: true` — on any modern Windows build this key is normally empty, so a
+  populated `DLLName` is itself the artifact, same logic as the IFEO `Debugger` value). Added a
+  fixture case, a new criterion wording for `RLP-C4`, an Overlay artifact-list entry citing
+  `DET0404` directly, and a `References` citation. Re-ran the full suite (now 4 findings
+  expected in the positive fixture, up from 3) — passes. `go vet` clean for both targets.
+  Rebuilt and re-ran the real-host scan: unchanged (this is a Windows-only check, so the
+  Linux-host real run was never exercising this code path either way; `M3`/persistence figures
+  are unchanged because `T1547.004` was already counted as covered — this fix improves the
+  *depth* of an already-counted technique, not the *count*).
+
+### 4. Reporting nuance surfaced (not a bug — the design already accounts for it)
+
+5 of the 26 covered technique IDs (`T1037`, `T1098`, `T1098.007`, `T1136`, `T1136.001`) have
+`os_scope: [linux, windows]` but are, in practice, covered **only on the Linux side** — no
+Windows check maps to them (Windows account/group management via `net.exe`/SAM is not
+implemented). The flat technique-level M3 count treats these as covered the moment any
+non-partial mapping exists, regardless of OS completeness; the separate **(technique, OS)
+pairs** metric — required by the spec and already implemented — is what correctly shows the
+Windows side of these 5 as not implemented. Confirmed the pairs metric does this correctly;
+flagging here only so the distinction is explicit rather than implicit in a second table.
+
+---
+
 ## Blockers carried forward
 
 | ID | Blocker | Effect |

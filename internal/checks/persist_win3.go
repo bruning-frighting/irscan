@@ -44,6 +44,11 @@ type loadPoint struct {
 	Kind string
 	// What describes the artifact for the finding text.
 	What string
+	// SubKeyLabel names what a SubValue entry's enumerated subkey represents ("image" for
+	// IFEO, "package" for Winlogon Notify). Defaults to "image" if empty. Needed because
+	// the two SubValue-shaped load points enumerate semantically different things, and
+	// labelling a Notify package name as an "image" would misdescribe the artifact.
+	SubKeyLabel string
 }
 
 // loadPoints is the table. Each entry's Expected set is the documented Windows default.
@@ -60,6 +65,20 @@ var loadPoints = []loadPoint{
 		Expected: []string{`c:\windows\system32\userinit.exe,`, `userinit.exe,`,
 			`c:\windows\system32\userinit.exe`, `userinit.exe`},
 		What: "the Winlogon userinit program, launched for every interactive logon",
+	},
+	{
+		// MITRE's own detection strategy for T1547.004 (DET0404) names three Winlogon
+		// locations to watch: "Shell, Notify, or Userinit". Shell and Userinit were
+		// covered above from the start; Notify was missing until this entry was added
+		// after cross-checking this check's coverage against MITRE's Analytic data
+		// directly (see STATUS.md). Notify packages are a pre-Vista GINA-era mechanism;
+		// on any modern Windows build this key is normally empty, so any populated
+		// DLLName value is itself the artifact -- the same shape as IFEO's Debugger value.
+		Hive: "HKLM", Path: `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify`,
+		SubValue: "DLLName", Technique: "T1547.004", Kind: "debugger",
+		NoLegitimateDefault: true, SubKeyLabel: "package",
+		What: "a Winlogon Notify package DLL (a legacy notification-package load point " +
+			"still named in MITRE's current detection guidance for this technique)",
 	},
 	{
 		Hive: "HKLM", Path: `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows`,
@@ -180,9 +199,9 @@ func (c *regLoadPointCheck) Meta() check.Meta {
 			{ID: "RLP-C3", Text: "A referenced path lies in a user-writable staging " +
 				"directory (%TEMP%, %APPDATA%, \\Users\\Public, \\ProgramData, " +
 				"\\Windows\\Temp, $Recycle.Bin, \\PerfLogs)."},
-			{ID: "RLP-C4", Text: "An Image File Execution Options Debugger value is " +
-				"present. There is no legitimate default for this value, so its mere " +
-				"presence is the artifact."},
+			{ID: "RLP-C4", Text: "An Image File Execution Options Debugger value, or a " +
+				"Winlogon Notify package DLLName value, is present. Neither has a " +
+				"legitimate default, so mere presence is the artifact."},
 			{ID: "RLP-C5", Text: "The value invokes a script interpreter, an encoded " +
 				"PowerShell command, a signed-binary proxy, or references a remote payload."},
 		},
@@ -213,6 +232,7 @@ func (c *regLoadPointCheck) Meta() check.Meta {
 				"credentials, so a DLL loaded there can capture them at the source.",
 			Artifacts: []string{
 				`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon -- Shell, Userinit`,
+				`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\<package> -- DLLName (the third Winlogon location MITRE's T1547.004 detection strategy DET0404 names, alongside Shell and Userinit)`,
 				`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows -- AppInit_DLLs (and the Wow6432Node view)`,
 				`HKLM\SYSTEM\CurrentControlSet\Control\Lsa -- Authentication Packages, Security Packages, Notification Packages`,
 				`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\<exe> -- Debugger`,
@@ -262,6 +282,11 @@ func (c *regLoadPointCheck) Meta() check.Meta {
 					URL: "https://attack.mitre.org/techniques/T1556/002"},
 				{Title: "MITRE ATT&CK T1546.012 Image File Execution Options Injection",
 					URL: "https://attack.mitre.org/techniques/T1546/012"},
+				{Title: "MITRE ATT&CK Detection Strategy DET0404 (names Shell, Notify and " +
+					"Userinit as the Winlogon locations for T1547.004 -- cross-checked " +
+					"directly against the pinned STIX bundle to find the Notify gap this " +
+					"check closes)",
+					URL: "https://attack.mitre.org/detectionstrategies/DET0404"},
 			},
 		},
 		Validation:        model.FixtureTested,
@@ -332,8 +357,12 @@ func (c *regLoadPointCheck) Run(ctx context.Context, env check.Env) model.CheckR
 					if !strings.EqualFold(v.Name, lp.SubValue) || strings.TrimSpace(v.String) == "" {
 						continue
 					}
+					label := lp.SubKeyLabel
+					if label == "" {
+						label = "image"
+					}
 					f, inv := c.assess(env, m, byID, lp, subInfo.Path, v,
-						fmt.Sprintf("%s for image %q", lp.What, sub))
+						fmt.Sprintf("%s for %s %q", lp.What, label, sub))
 					inventory = append(inventory, inv)
 					if f != nil {
 						findings = append(findings, *f)
@@ -614,6 +643,15 @@ func (c *regLoadPointCheck) Cases() []check.FixtureCase {
 			collect.RegKeyInfo{Values: []collect.RegValue{
 				{Name: "Debugger", Type: collect.RegSZ, String: `C:\Windows\System32\cmd.exe`},
 			}})
+		// Winlogon Notify package DLL: RLP-C4, the gap found by cross-checking this check
+		// against MITRE's own T1547.004 detection strategy (DET0404), which names Shell,
+		// Notify and Userinit as the three Winlogon locations to watch.
+		r.Set("HKLM", `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify`,
+			collect.RegKeyInfo{SubKeys: []string{"legacyhook"}})
+		r.Set("HKLM", `SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon\Notify\legacyhook`,
+			collect.RegKeyInfo{Values: []collect.RegValue{
+				{Name: "DLLName", Type: collect.RegSZ, String: `C:\ProgramData\legacyhook.dll`},
+			}})
 		return r
 	}
 
@@ -633,7 +671,7 @@ func (c *regLoadPointCheck) Cases() []check.FixtureCase {
 				return env, nil
 			},
 			WantOutcome: model.Detected,
-			MinFindings: 3,
+			MinFindings: 4,
 			WantTechniqueIDs: []string{
 				"T1547.004", "T1556.002", "T1546.012",
 			},
