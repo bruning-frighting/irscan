@@ -362,6 +362,72 @@ under B-001. That is the honest direction for that metric and it is not adjusted
 
 ---
 
+## Phase 2b — Defense Evasion (stealth + defense-impairment) — **GATE PASSED**
+
+Six checks added, taking the inventory to **17**. Three reusable implementations
+(`scriptFileCheck`, `regPolicyCheck`, plus direct checks) share collection logic across
+several ATT&CK sub-techniques; attribution stays **per artifact** in every case.
+
+| Check | ATT&CK (non-partial) | OS | Validation |
+|---|---|---|---|
+| `LNX-DEFIMP-HISTORY-001` | T1690, T1070 (T1070.003 partial) | linux | **LAB_VERIFIED** |
+| `LNX-STEALTH-LOGSINK-001` | T1685.006, T1685 (T1070 partial) | linux | **LAB_VERIFIED** |
+| `LNX-STEALTH-HIDDEN-001` | T1564.001, T1564 | linux | **LAB_VERIFIED** |
+| `WIN-DEFIMP-DEFENDER-001` | T1685.007, T1685, T1564.012, T1564 | windows | FIXTURE_TESTED (B-001) |
+| `WIN-DEFIMP-FIREWALL-001` | T1686.003, T1686 | windows | FIXTURE_TESTED (B-001) |
+| `WIN-DEFIMP-EVENTLOG-001` | T1685.001, T1685 | windows | FIXTURE_TESTED (B-001) |
+
+### Real-host reconnaissance before writing checks
+
+Rather than guess at noise sources, the live WSL2 Kali host was inspected first
+(`/var/log`, `/tmp`, `/var/tmp`, `.bashrc`) specifically to find what a naive design would
+false-positive on. This paid off immediately:
+
+| Measured on the real host | Consequence for the design |
+|---|---|
+| 150 dot-prefixed files in `/tmp` (JIT/runtime cache `.so` files), 0 of them executable | `LNX-STEALTH-HIDDEN-001`'s criterion is narrowed to **hidden + executable**, not merely hidden |
+| 5 legitimately zero-byte logs (`btmp`, `lastlog`, `bootstrap.log`...), one with a populated rotated sibling | `LNX-STEALTH-LOGSINK-001` never uses file size as a criterion; only symlink-to-sink, redirected directory, or wrong file type |
+| The real `.bashrc` contains the comment *"see HISTSIZE and HISTFILESIZE in bash(1)"* plus `HISTSIZE=1000` | `LNX-DEFIMP-HISTORY-001`'s patterns are line-anchored to real assignments/builtins, never a bare substring match |
+
+All three predictions were then confirmed empirically: the real-host scan (below) produced
+**zero findings** from these three checks, exactly as designed.
+
+### Defects found and fixed in Phase 2b
+
+1. **RE2 has no backreferences.** `histFileSinkPattern`/`histSizeZeroPattern` were first
+   written with `\2`/`\3` backreferences for quote matching; Go's `regexp` (RE2) rejects
+   that at compile time — the package failed to even `init()`. Fixed by enumerating each
+   quote style as an alternation instead of referencing an earlier group.
+2. **A literal `...` directory name is unrepresentable through the Win32 API.** The fixture
+   generator runs on Windows (this host); `os.makedirs` silently normalises away trailing
+   dots in a path component, so the all-dots regression fixture for `HID-C3`/`HID-C4` could
+   not be created directly. Fixed with the same indirection already used for symlinks: the
+   generator writes a `renames.json` manifest, and the Go test harness — which always runs
+   on Linux — renames the safely-named directory into place before applying modes.
+
+### Real-host validation (live WSL2 Kali, unprivileged)
+
+`scan_id irscan-20261014T071031Z-0f3b1211`, 10 Linux checks executed, **605 inventory
+items, 0 findings, 0 false positives**. `LNX-STEALTH-HIDDEN-001` and `LNX-PERSIST-ACCOUNT-001`
+genuinely returned `PARTIAL_DATA` (some `/tmp` subtrees and parts of `/etc/passwd`-derived
+data remain unreadable unprivileged); `LNX-PERSIST-RCSCRIPT-001`, `LNX-PERSIST-SYSTEMD-001`
+and `LNX-STEALTH-LOGSINK-001` returned clean `NOT_DETECTED`.
+
+### Coverage after Phase 2b
+
+| Metric | Phase 2a | Phase 2b |
+|---|---|---|
+| M3 implementation coverage | 25/296 = 8.4% | **35/296 = 11.8%** |
+| M4 partial coverage | 3/296 | 4/296 = 1.4% |
+| M5 validation (LAB_VERIFIED) | 7/11 = 63.6% | **10/17 = 58.8%** (FIXTURE_TESTED 7/17 beside it) |
+
+M3 per tactic: persistence 23/91, **defense-impairment 9/35**, **stealth 4/141**,
+**credential-access 1/58** (the last entirely as a side effect of
+`WIN-PERSIST-REGLOADPOINT-001`'s `T1556.002` mapping, which carries both tactics). (technique,
+OS) pairs: linux 20/167, windows 20/269.
+
+---
+
 ## Blockers carried forward
 
 | ID | Blocker | Effect |

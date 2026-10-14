@@ -90,11 +90,39 @@ func prepareFixtures(t *testing.T) string {
 				continue
 			}
 			base := filepath.Join(dst, checkDir.Name(), cd.Name())
+			applyRenames(t, base)
 			applyModes(t, base)
 			applyLinks(t, base)
 		}
 	}
 	return dst
+}
+
+// applyRenames moves fixture entries from a Windows-safe placeholder path to their real
+// path. Some real-world artifact names (an all-dots directory, trailing dots or spaces)
+// are rejected or silently normalised by the Win32 API that the fixture generator runs
+// under, so such paths are written under a safe name and renamed here -- this harness
+// always runs on Linux and has no such restriction.
+func applyRenames(t *testing.T, base string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(base, "renames.json"))
+	if err != nil {
+		return
+	}
+	var renames map[string]string
+	if err := json.Unmarshal(data, &renames); err != nil {
+		t.Fatalf("parsing renames.json in %s: %v", base, err)
+	}
+	for safe, real := range renames {
+		src := filepath.Join(base, filepath.FromSlash(safe))
+		dst := filepath.Join(base, filepath.FromSlash(real))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatalf("creating parent dir for rename target %s: %v", real, err)
+		}
+		if err := os.Rename(src, dst); err != nil {
+			t.Fatalf("renaming %s -> %s: %v", safe, real, err)
+		}
+	}
 }
 
 func applyModes(t *testing.T, base string) {

@@ -39,6 +39,20 @@ def link(tree: str, rel: str, target: str) -> None:
     LINKS.setdefault(tree, {})[rel.replace(os.sep, "/")] = target
 
 
+# fixture tree -> {safe_source_path: real_destination_path}. Some real-world artifact names
+# (an all-dots directory, a name ending in trailing dots/spaces) are rejected or silently
+# normalised by the Win32 API, which is what this generator runs under. Such paths are
+# written under a safe placeholder name and renamed into place by the Go test harness,
+# which always runs on Linux and has no such restriction -- the same indirection used for
+# symlinks via LINKS/links.json.
+RENAMES: dict[str, dict[str, str]] = {}
+
+
+def renamed_path(tree: str, safe_rel: str, real_rel: str) -> str:
+    RENAMES.setdefault(tree, {})[safe_rel.replace(os.sep, "/")] = real_rel.replace(os.sep, "/")
+    return safe_rel
+
+
 def w(tree: str, rel: str, content: str, mode: int | None = None) -> None:
     """Write a fixture file, recording a non-default mode when one is given."""
     path = os.path.join(ROOT, tree, rel)
@@ -807,6 +821,124 @@ def schtask() -> None:
           "as free of scheduled-task persistence on the basis of never having looked.")
 
 
+# =========================================================================================
+# LNX-DEFIMP-HISTORY-001
+# =========================================================================================
+
+def history() -> None:
+    t = "lnx-defimp-history-001/positive"
+    w(t, "etc/passwd", PASSWD_BASIC)
+    # HISTFILE=/dev/null in a profile.d drop-in: HIST-C1.
+    w(t, "etc/profile.d/99-privacy.sh", """\
+# Suppress command history for all users
+export HISTFILE=/dev/null
+""")
+    # HISTSIZE=0 in the same file set, as a second independent signal: HIST-C2.
+    w(t, "etc/profile.d/98-noshist.sh", """\
+export HISTSIZE=0
+export HISTFILESIZE=0
+""")
+
+    t = "lnx-defimp-history-001/negative"
+    w(t, "etc/passwd", PASSWD_BASIC)
+    # The REAL stock Kali/Debian .bashrc content, including the comment that previously
+    # false-positived an unanchored pattern.
+    w(t, "home/alice/.bashrc", """\
+# ~/.bashrc: executed by bash(1) for non-login shells.
+case $- in
+    *i*) ;;
+      *) return;;
+esac
+
+# don't put duplicate lines or lines starting with space in the history.
+HISTCONTROL=ignoreboth
+
+# append to the history file, don't overwrite it
+shopt -s histappend
+
+# for setting history length see HISTSIZE and HISTFILESIZE in bash(1)
+HISTSIZE=1000
+HISTFILESIZE=2000
+
+# check the window size after each command and, if necessary,
+# update the values of LINES and COLUMNS.
+shopt -s checkwinsize
+""")
+    w(t, "etc/profile", """\
+if [ "$(id -u)" -eq 0 ]; then
+  PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+else
+  PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games"
+fi
+export PATH
+""")
+
+    empty("lnx-defimp-history-001/nodata",
+          "Deliberately empty: no shell initialisation file exists on this host.\n"
+          "Proves the check returns INSUFFICIENT_DATA rather than NOT_DETECTED.")
+
+
+# =========================================================================================
+# LNX-STEALTH-LOGSINK-001
+# =========================================================================================
+
+def logsink() -> None:
+    t = "lnx-stealth-logsink-001/positive"
+    w(t, "var/log/syslog", "placeholder\n")
+    link(t, "var/log/auth.log", "/dev/null")
+    link(t, "var/log/audit", "/tmp/.nowhere")
+
+    t = "lnx-stealth-logsink-001/negative"
+    # Exactly the shape measured on the real host: several legitimately zero-byte logs,
+    # one zero-byte log with a POPULATED rotated sibling, and a genuine README symlink.
+    w(t, "var/log/syslog", "Oct 14 09:00:01 host CRON[123]: session opened\n" * 5)
+    w(t, "var/log/auth.log", "Oct 14 09:00:01 host sshd[456]: Accepted publickey\n" * 5)
+    w(t, "var/log/wtmp", "binary-wtmp-placeholder")
+    w(t, "var/log/btmp", "")
+    w(t, "var/log/lastlog", "")
+    w(t, "var/log/bootstrap.log", "")
+    w(t, "var/log/alternatives.log", "")
+    w(t, "var/log/alternatives.log.1", "update-alternatives placeholder content\n")
+    link(t, "var/log/README", "../../usr/share/doc/systemd/README.logs")
+
+    empty("lnx-stealth-logsink-001/nodata",
+          "Deliberately empty: no /var/log exists on this host.\n"
+          "Proves the check returns INSUFFICIENT_DATA rather than NOT_DETECTED.")
+
+
+# =========================================================================================
+# LNX-STEALTH-HIDDEN-001
+# =========================================================================================
+
+def hiddenartifacts() -> None:
+    t = "lnx-stealth-hidden-001/positive"
+    # Hidden EXECUTABLE in /tmp: HID-C1. Inert placeholder content, not a real payload.
+    w(t, "tmp/.session-cache", "#!/bin/sh\necho placeholder\n", mode=0o755)
+    # All-dots directory containing an executable: HID-C3 + HID-C4.
+    # A literal "..." directory name is normalised away by the Win32 API (trailing dots in
+    # a path component are stripped), so it cannot be created by this generator, which runs
+    # on Windows. Written under a safe placeholder name and renamed into place by the Go
+    # test harness, which runs on Linux and has no such restriction.
+    safe = renamed_path(t, "tmp/__DOTDIR__allDots", "tmp/...")
+    # Write without the mode= kwarg: MODES is keyed by the FINAL (post-rename) path, since
+    # applyModes runs after applyRenames in the Go harness. Using w()'s mode= here would
+    # record the mode under the safe pre-rename path instead.
+    w(t, safe + "/runner", "#!/bin/sh\necho placeholder\n")
+    MODES.setdefault(t, {})["tmp/.../runner"] = 0o755
+
+    t = "lnx-stealth-hidden-001/negative"
+    # Reproduces the measured real-host condition: many hidden NON-executable files.
+    for i in range(12):
+        w(t, "tmp/.%040x-00000000.so" % (0xbeef0000 + i), "placeholder shared object\n")
+    w(t, "tmp/.X11-unix/placeholder", "")
+    w(t, "var/tmp/.cache-marker", "not executable\n")
+
+    empty("lnx-stealth-hidden-001/nodata",
+          "Deliberately empty and unreachable (the no_data case additionally denies '/'\n"
+          "in persist checks that need it). Proves INSUFFICIENT_DATA rather than\n"
+          "NOT_DETECTED when no staging directory can be examined.")
+
+
 def main() -> int:
     if os.path.isdir(ROOT):
         shutil.rmtree(ROOT)
@@ -822,14 +954,25 @@ def main() -> int:
     accounts()
     winservice()
     schtask()
-    for case, note in [
-        ("positive", "Load-point data comes from the FakeRegistry in persist_win3.go "
-                     "(appended Userinit, rogue password filter, IFEO Debugger)."),
-        ("negative", "Load-point data comes from the FakeRegistry in persist_win3.go "
-                     "(modern Windows defaults, benign IFEO subkeys)."),
-        ("nodata", "No registry is supplied, so the check must return INSUFFICIENT_DATA."),
+    history()
+    logsink()
+    hiddenartifacts()
+
+    # Registry-only checks: the FakeRegistry lives next to the check, so the fixture tree
+    # only has to exist. The note records where the data actually comes from, so a reviewer
+    # looking at an empty directory is not left guessing.
+    for name, where in [
+        ("win-persist-regloadpoint-001", "persist_win3.go"),
+        ("win-defimp-defender-001", "defimp_win.go"),
+        ("win-defimp-firewall-001", "defimp_win.go"),
+        ("win-defimp-eventlog-001", "defimp_win.go"),
     ]:
-        empty("win-persist-regloadpoint-001/" + case, note)
+        for case in ("positive", "negative", "nodata"):
+            empty("%s/%s" % (name, case),
+                  "Registry-only check. The %s case's registry contents are defined by the\n"
+                  "FakeRegistry in internal/checks/%s; this tree exists so the filesystem\n"
+                  "root is valid. The nodata case supplies no registry at all, so the check\n"
+                  "must return INSUFFICIENT_DATA." % (case, where))
 
     for tree, modes in sorted(MODES.items()):
         path = os.path.join(ROOT, tree, "modes.json")
@@ -843,6 +986,13 @@ def main() -> int:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(dict(sorted(links.items())), fh, indent=2, sort_keys=True)
+            fh.write("\n")
+
+    for tree, renames in sorted(RENAMES.items()):
+        path = os.path.join(ROOT, tree, "renames.json")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(dict(sorted(renames.items())), fh, indent=2, sort_keys=True)
             fh.write("\n")
 
     trees = sorted(

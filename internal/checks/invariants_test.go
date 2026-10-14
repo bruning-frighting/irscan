@@ -34,6 +34,13 @@ var expectedChecks = []string{
 	"WIN-PERSIST-REGLOADPOINT-001",
 	"WIN-PERSIST-SCHTASK-001",
 	"WIN-PERSIST-SERVICE-001",
+	// Phase 2b defence evasion
+	"WIN-DEFIMP-DEFENDER-001",
+	"WIN-DEFIMP-EVENTLOG-001",
+	"WIN-DEFIMP-FIREWALL-001",
+	"LNX-DEFIMP-HISTORY-001",
+	"LNX-STEALTH-LOGSINK-001",
+	"LNX-STEALTH-HIDDEN-001",
 }
 
 func TestExpectedChecksAreRegistered(t *testing.T) {
