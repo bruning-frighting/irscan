@@ -298,7 +298,9 @@ def baseline_implementation_status(tech, testability):
 
     return (
         "PLANNED",
-        "In implementation scope and scannable (evidence class %s). No gate-passing check is "
-        "recorded in the registry baseline; the effective status is computed by joining this "
-        "baseline with the Go check inventory." % cls,
+        "In implementation scope and scannable (evidence class %s), but no check in this "
+        "build maps to it yet. Not a difficulty judgement and not out of scope -- building "
+        "a check for it is future work. If a later build adds a gate-passing check for this "
+        "technique, the coverage report's effective status overrides this baseline and "
+        "reports IMPLEMENTED or PARTIAL instead." % cls,
     )

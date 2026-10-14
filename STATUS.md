@@ -485,6 +485,64 @@ T1556.002 mapping from Phase 2a). Figures recomputed directly from
 
 ---
 
+## Phase 2d — Classify all remaining in-scope techniques — **GATE PASSED**
+
+**Gate: the registry has no unclassified technique.** This was already satisfied in Phase 0
+and remains true: **M2 = 511/511 = 100.0%** (every `U_host` technique carries a resolved
+`testability_class` and a `baseline_implementation_status`), **`UNDETERMINED` = 0**.
+Re-verified after Phase 2c: `python build/build_registry.py --check-determinism` still
+passes the byte-identical-rerun gate.
+
+### What this phase actually did
+
+The classification itself is rule-derived (`build/registry_builder/classify.py`), not
+hand-typed, so there was no backlog of techniques to individually classify — Phase 0 already
+classified all 511. What Phase 2d did:
+
+1. **Re-verified the gate holds** with 19 real checks now built (it does: M2 unchanged,
+   determinism unchanged).
+2. **Tightened the PLANNED rationale text** for in-scope techniques with zero mapped checks.
+   The old text ("the effective status is computed by joining this baseline with the Go
+   check inventory") read as internal engineering process rather than an answer to the
+   analyst's actual question. It now reads: *"...but no check in this build maps to it yet.
+   Not a difficulty judgement and not out of scope -- building a check for it is future
+   work."* Regenerated the registry, re-verified the determinism gate still passes with the
+   new text, rebuilt both binaries against the refreshed embed, reran the full test suite and
+   the real-host scan — all identical in behavior, only the rationale prose changed.
+3. **Spot-checked honesty of the `UNSUPPORTED` classifications** rather than trusting the
+   rule engine blindly. Within `U_host` (511), only **3 techniques are `UNSUPPORTED`**:
+   `T1213.002` SharePoint, `T1698` Indirect Prompt Injection, `T1699` Direct Prompt Injection
+   — all three `OFF_HOST`, evidence living in a SaaS/application layer this tool cannot
+   reach. **`NOT_APPLICABLE` = 0** within `U_host` by construction (a platform mismatch
+   excludes a technique from `U_host` entirely, so it never needs `NOT_APPLICABLE` inside
+   this universe). The remaining **508 are honestly `PLANNED`**.
+4. **Checked that the memory/network evidence-family design decision (D-006) was actually
+   right**, not just plausible. `T1055` Process Injection and `T1003.001` LSASS Memory were
+   *expected* to land as `MEMORY_ONLY` per the hand-curated family table in
+   `technique_families.json`. They instead resolved to `HOST_TELEMETRY` / `MIXED`, because
+   their own ATT&CK v20.0 detection strategies cite Sysmon/ETW/auditd telemetry (Sysmon Event
+   ID 8 for `CreateRemoteThread`, for instance) — which is a real, telemetry-based detection
+   path independent of reading the injected memory itself. The rule order documented in
+   `classify.py` (§R5, telemetry checked *before* the memory/network family) exists
+   specifically so this doesn't get mis-classified, and verifying it against these two
+   concrete techniques confirms the rule does what it was designed to do.
+
+### Honest summary of where the registry stands
+
+| | Count | Share of `U_host` (511) |
+|---|---|---|
+| Effectively `IMPLEMENTED` (checks pass full gate) | 39 | 7.6% |
+| Effectively `PARTIAL` | 5 | 1.0% |
+| `UNSUPPORTED` (evidence-reach limit, all `OFF_HOST`) | 3 | 0.6% |
+| `NOT_APPLICABLE` within `U_host` | 0 | 0% |
+| `PLANNED` (scannable, not yet built) | 464 | 90.8% |
+
+No number here is padded by relabeling a hard technique as inapplicable: `NOT_APPLICABLE` is
+used only for the one honest case (platform mismatch), and it never fires inside `U_host` by
+definition.
+
+---
+
 ## Blockers carried forward
 
 | ID | Blocker | Effect |
