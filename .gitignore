@@ -1,0 +1,14 @@
+# Pinned STIX bundle: 55 MB, reproducible from build/sources.lock.json via build/fetch_stix.py.
+# Its SHA-256 is pinned, so excluding it costs no traceability.
+build/cache/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Scan output is evidence; it must never be committed.
+out/
+scan-output/
+*.scan.json
+
+__pycache__
